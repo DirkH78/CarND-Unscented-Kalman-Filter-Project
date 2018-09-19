@@ -25,10 +25,10 @@ UKF::UKF() {
   use_radar_ = true;
 
   // Process noise standard deviation longitudinal acceleration in m/s^2
-  std_a_ = 4;
+  std_a_ = 1.9;
 
   // Process noise standard deviation yaw acceleration in rad/s^2
-  std_yawdd_ = 1;
+  std_yawdd_ = 0.28;
   
   //DO NOT MODIFY measurement noise values below these are provided by the sensor manufacturer.
   // Laser measurement noise standard deviation position1 in m
@@ -112,66 +112,70 @@ void UKF::ProcessMeasurement(MeasurementPackage meas_package) {
   if (dbmode_){
     cout << "ProcessMeasurement!" << endl;
   }
-  if (!is_initialized_) {
-    x_ << 1, 1, 1, 1, 1;
+  if ((meas_package.sensor_type_ == MeasurementPackage::RADAR && use_radar_) ||
+      (meas_package.sensor_type_ == MeasurementPackage::LASER && use_laser_)) {
     
-    P_ << 1, 0, 0, 0, 0,
-          0, 1, 0, 0, 0,
-          0, 0, 1, 0, 0,
-          0, 0, 0, 1, 0,
-          0, 0, 0, 0, 1;
-    
-    // init timestamp
+    if (!is_initialized_) {
+      x_ << 1, 1, 0, 1, 0;
+
+      P_ << 0.5, 0, 0, 0, 0,
+            0, 0.5, 0, 0, 0,
+            0, 0, 1, 0, 0,
+            0, 0, 0, 1, 0,
+            0, 0, 0, 0, 1;
+
+      // init timestamp
+      time_us_ = meas_package.timestamp_;
+
+      if (meas_package.sensor_type_ == MeasurementPackage::RADAR && use_radar_) {
+        /**
+        Convert radar from polar to cartesian coordinates and initialize state.
+        */
+        if (dbmode_){
+          cout << "Process Meas.: Convert radar from polar to cartesian coordinates and initialize state" << endl;
+        }
+        float rho = meas_package.raw_measurements_(0);
+        float phi = meas_package.raw_measurements_(1);
+        float rho_dot = meas_package.raw_measurements_(2);
+        x_(0) = rho * cos(phi);
+        x_(1) = rho * sin(phi);
+        //take abs of v_x and v_y to estimate v
+        x_(2) = sqrt(((rho_dot * cos(phi)) * (rho_dot * cos(phi))) + ((rho_dot * sin(phi)) * (rho_dot * sin(phi))));
+      }
+      else if (meas_package.sensor_type_ == MeasurementPackage::LASER && use_laser_) {
+        if (dbmode_){
+          cout << "lidar initialize state" << endl;
+        }
+        x_(0) = meas_package.raw_measurements_(0);
+        x_(1) = meas_package.raw_measurements_(1);
+      }
+      // done initializing, no need to predict or update
+      is_initialized_ = true;
+      return;
+    }
+    /*****************************************************************************
+     *  Prediction
+     ****************************************************************************/
+    //compute the time elapsed between the current and previous measurements
+    if (dbmode_){
+          cout << "compute the time elapsed between the current and previous measurements" << endl;
+        }
+    float dt = (meas_package.timestamp_ - time_us_) / 1000000.0; //dt - expressed in seconds
     time_us_ = meas_package.timestamp_;
-    
+
+    Prediction(dt);
+
+    /*****************************************************************************
+     *  Update
+     ****************************************************************************/
     if (meas_package.sensor_type_ == MeasurementPackage::RADAR) {
-      /**
-      Convert radar from polar to cartesian coordinates and initialize state.
-      */
-      if (dbmode_){
-        cout << "Process Meas.: Convert radar from polar to cartesian coordinates and initialize state" << endl;
-      }
-      float rho = meas_package.raw_measurements_(0);
-      float phi = meas_package.raw_measurements_(1);
-      float rho_dot = meas_package.raw_measurements_(2);
-      x_(0) = rho * cos(phi);
-      x_(1) = rho * sin(phi);
-      //take abs of v_x and v_y to estimate v
-      x_(2) = sqrt(((rho_dot * cos(phi)) * (rho_dot * cos(phi))) + ((rho_dot * sin(phi)) * (rho_dot * sin(phi))));
-    }
+      // Radar updates
+      UpdateRadar(meas_package);
+    } 
     else if (meas_package.sensor_type_ == MeasurementPackage::LASER) {
-      if (dbmode_){
-        cout << "lidar initialize state" << endl;
-      }
-      x_(0) = meas_package.raw_measurements_(0);
-      x_(1) = meas_package.raw_measurements_(1);
+      // Laser updates
+      UpdateLidar(meas_package);
     }
-    // done initializing, no need to predict or update
-    is_initialized_ = true;
-    return;
-  }
-  /*****************************************************************************
-   *  Prediction
-   ****************************************************************************/
-  //compute the time elapsed between the current and previous measurements
-  if (dbmode_){
-        cout << "compute the time elapsed between the current and previous measurements" << endl;
-      }
-  float dt = (meas_package.timestamp_ - time_us_) / 1000000.0; //dt - expressed in seconds
-  time_us_ = meas_package.timestamp_;
-  
-  Prediction(dt);
-  
-  /*****************************************************************************
-   *  Update
-   ****************************************************************************/
-  if (meas_package.sensor_type_ == MeasurementPackage::RADAR) {
-    // Radar updates
-    UpdateRadar(meas_package);
-  } 
-  else if (meas_package.sensor_type_ == MeasurementPackage::LASER) {
-    // Laser updates
-    UpdateLidar(meas_package);
   }
 }
 
@@ -454,9 +458,9 @@ void UKF::UpdateLidar(MeasurementPackage meas_package) {
   NIS_laser_ = z_diff.transpose() * S.inverse() * z_diff;
   
   // print the output
-  //cout << "x_ = " << x_ << endl;
-  //cout << "P_ = " << P_ << endl;
-  //cout << "NIS_laser_ = " << NIS_laser_ << endl;
+  cout << "x_ = " << x_ << endl;
+  cout << "P_ = " << P_ << endl;
+  cout << "NIS_laser_ = " << NIS_laser_ << endl;
   cout << "NIS_laser_ratio = " << NIS_laser_ / lim_laser << endl;
 }
 
@@ -590,8 +594,8 @@ void UKF::UpdateRadar(MeasurementPackage meas_package) {
   NIS_radar_ = z_diff.transpose() * S.inverse() * z_diff;
   
   // print the output
-  //cout << "x_ = " << x_ << endl;
-  //cout << "P_ = " << P_ << endl;
-  //cout << "NIS_radar_ = " << NIS_radar_ << endl;
+  cout << "x_ = " << x_ << endl;
+  cout << "P_ = " << P_ << endl;
+  cout << "NIS_radar_ = " << NIS_radar_ << endl;
   cout << "NIS_radar_ratio = " << NIS_radar_ / lim_radar << endl;
 }
